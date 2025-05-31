@@ -1,5 +1,5 @@
 import React from 'react';
-import { WHISPER_MODELS, type WhisperModelKey } from '../App'; // Adjust path as needed
+import { WHISPER_MODELS, type WhisperModelKey } from '../hooks/useTranscription'; // Adjust path as needed
 
 interface ModelSelectorComponentProps {
   selectedModel: WhisperModelKey;

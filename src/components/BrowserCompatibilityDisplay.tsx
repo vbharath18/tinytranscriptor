@@ -1,6 +1,5 @@
 import React from 'react';
-import { WHISPER_MODELS } from '../App'; // Adjust path as needed
-import type { WhisperModelKey } from '../App';
+import { WHISPER_MODELS, type WhisperModelKey } from '../hooks/useTranscription'; // Adjust path as needed
 
 interface BrowserCompatibilityDisplayProps {
   browserCompatibility: {
