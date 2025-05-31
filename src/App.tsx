@@ -1,13 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import './App.css';
-import { pipeline, env } from '@xenova/transformers';
+import { env } from '@xenova/transformers';
 import BrowserCompatibilityDisplay from './components/BrowserCompatibilityDisplay';
 import ModelSelectorComponent from './components/ModelSelectorComponent';
 import useAudioRecorder from './hooks/useAudioRecorder';
-import useTranscription, { WHISPER_MODELS } from './hooks/useTranscription'; // Removed type WhisperModelKey
+import useTranscription, { WHISPER_MODELS, type WhisperModelKey } from './hooks/useTranscription';
 import { audioBufferToWav } from './utils/audioUtils';
 import { getBrowserCompatibility, type BrowserCompatibility } from './utils/browserUtils';
 import { copyToClipboard } from './utils/commonUtils';
+import { runONNXDiagnostics, generateDiagnosticReport } from './utils/onnxDiagnostics';
 
 // Configure transformers.js environment related to model fetching and execution
 env.allowLocalModels = false; // Disallow local models for this web environment
@@ -16,23 +17,27 @@ env.useBrowserCache = true;   // Cache models in browser's IndexedDB
 
 // Configure ONNX Runtime Web settings for compatibility and stability
 if (typeof window !== 'undefined') { // Ensure this runs only in browser environment
-  // numThreads = 1 can reduce CPU load and improve stability on some devices, especially mobile.
-  env.backends.onnx.wasm.numThreads = 1;
-  // SIMD (Single Instruction, Multiple Data) optimizations can cause errors on certain browser/OS combinations.
-  // Disabling it enhances compatibility, though potentially at a minor performance cost.
-  env.backends.onnx.wasm.simd = false;
-  // Proxying to a Web Worker can sometimes cause issues with model loading or execution in specific environments.
-  // Disabling it runs ONNX Runtime directly on the main thread.
-  env.backends.onnx.wasm.proxy = false;
-  
-  // Set log level for ONNX Runtime, 'warning' is a good default to catch potential issues.
-  env.backends.onnx.logLevel = 'warning';
-  // Specify 'wasm' as the execution provider for ONNX Runtime Web.
-  env.backends.onnx.executionProviders = ['wasm'];
-  
-  // WebAssembly optimization settings
-  env.backends.onnx.wasm.wasmPaths = undefined; // Use default paths for WASM files
-  env.backends.onnx.wasm.initTimeout = 30000; // 30-second timeout for WASM initialization
+  // Enhanced ONNX Runtime configuration for better compatibility
+  try {
+    // Conservative settings for maximum browser compatibility
+    env.backends.onnx.wasm.numThreads = 1;
+    env.backends.onnx.wasm.simd = false;
+    env.backends.onnx.wasm.proxy = false;
+    
+    // Set log level to 'error' to reduce console noise
+    env.backends.onnx.logLevel = 'error';
+    
+    // Primary execution provider
+    env.backends.onnx.executionProviders = ['wasm'];
+    
+    // WebAssembly optimization settings
+    env.backends.onnx.wasm.wasmPaths = undefined;
+    env.backends.onnx.wasm.initTimeout = 60000; // Increased timeout to 60 seconds
+    
+    console.log('ONNX Runtime configured for maximum compatibility');
+  } catch (configError) {
+    console.warn('Failed to configure ONNX Runtime:', configError);
+  }
 }
 
 // Static audio configuration for recording - defined outside component to prevent re-creation on renders
@@ -227,11 +232,50 @@ function App() {
     setAudioDebugInfo(null); // Clear previous debug info
 
     try {
-      // Step 1: Initialize the transcriber (loads the AI model if not already loaded)
-      const transcriberPipeline = await transcription.initializeTranscriber();
-      if (!transcriberPipeline) {
-        setError('Transcription model could not be initialized. Please try refreshing or select a different model.');
-        return; // Exit if model isn't available
+      // Define model fallback order: start with user's selection, fallback to smaller models
+      const modelFallbackOrder: WhisperModelKey[] = [
+        transcription.selectedModel, // Start with user's selected model
+        ...(['tiny.en', 'tiny', 'base.en', 'base'] as WhisperModelKey[])
+          .filter(model => model !== transcription.selectedModel && WHISPER_MODELS[model])
+      ];
+
+      let transcriberPipeline: any = null;
+      let successfulModel: WhisperModelKey | null = null;
+      let lastModelError: Error | null = null;
+
+      // Step 1: Try to initialize models in fallback order
+      for (let i = 0; i < modelFallbackOrder.length; i++) {
+        const modelToTry = modelFallbackOrder[i];
+        try {
+          console.log(`Attempting to load model: ${WHISPER_MODELS[modelToTry].name} (${i + 1}/${modelFallbackOrder.length})`);
+          transcriberPipeline = await transcription.initializeTranscriber(modelToTry);
+          
+          if (transcriberPipeline) {
+            successfulModel = modelToTry;
+            console.log(`Successfully loaded model: ${WHISPER_MODELS[modelToTry].name}`);
+            
+            // Update selected model if we had to fallback
+            if (modelToTry !== transcription.selectedModel) {
+              console.log(`Model fallback: ${WHISPER_MODELS[transcription.selectedModel].name} → ${WHISPER_MODELS[modelToTry].name}`);
+              transcription.setSelectedModel(modelToTry);
+            }
+            break;
+          }
+        } catch (modelError) {
+          console.warn(`Failed to load ${WHISPER_MODELS[modelToTry].name}:`, modelError);
+          lastModelError = modelError instanceof Error ? modelError : new Error(String(modelError));
+          
+          // Add delay between model attempts
+          if (i < modelFallbackOrder.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        }
+      }
+
+      if (!transcriberPipeline || !successfulModel) {
+        const errorMessage = `Failed to load any transcription model. Last error: ${lastModelError?.message || 'Unknown error'}. Please try: 1) Refreshing the page, 2) Clearing browser cache, 3) Using a different browser (Chrome/Edge recommended), or 4) Trying incognito mode.`;
+        setError(errorMessage);
+        return;
       }
 
       // Step 2: Fetch audio data from the URL (recorded or uploaded)
@@ -303,27 +347,64 @@ function App() {
       }
 
       // --- Transcription Process ---
-      const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Transcription timed out after 60s.')), 60000));
-
       try {
         console.log('Starting transcription pipeline with processed audio...');
         // Define a series of configurations to try for transcription for robustness
         const transcriptionConfigs = [
-          { task: 'transcribe', language: transcription.selectedModel.includes('.en') ? 'english' : undefined, return_timestamps: false, chunk_length_s: 10, stride_length_s: 2, force_full_sequences: false, suppress_tokens: [-1] },
-          { task: 'transcribe', language: transcription.selectedModel.includes('.en') ? 'english' : undefined, return_timestamps: false, chunk_length_s: 30 },
-          { task: 'transcribe', return_timestamps: false },
-          {} // Basic fallback
+          // Config 1: Most compatible settings
+          { 
+            task: 'transcribe', 
+            language: transcription.selectedModel.includes('.en') ? 'english' : undefined, 
+            return_timestamps: false, 
+            chunk_length_s: 30,
+            stride_length_s: 5,
+            normalize: true
+          },
+          // Config 2: Simplified with smaller chunks
+          { 
+            task: 'transcribe', 
+            language: transcription.selectedModel.includes('.en') ? 'english' : undefined, 
+            return_timestamps: false, 
+            chunk_length_s: 10,
+            stride_length_s: 2
+          },
+          // Config 3: Basic configuration
+          { 
+            task: 'transcribe', 
+            language: transcription.selectedModel.includes('.en') ? 'english' : undefined, 
+            return_timestamps: false 
+          },
+          // Config 4: Minimal fallback
+          { 
+            task: 'transcribe', 
+            return_timestamps: false 
+          },
+          // Config 5: Absolute minimal
+          {}
         ];
+        
         let result = null;
         for (let i = 0; i < transcriptionConfigs.length; i++) {
           try {
             console.log(`Attempting transcription with configuration ${i + 1}/${transcriptionConfigs.length}...`);
+            
+            // Add timeout for each transcription attempt
             const transcriptionPromise = transcriberPipeline(processedAudio, transcriptionConfigs[i]);
+            const timeoutPromise = new Promise<never>((_, reject) => 
+              setTimeout(() => reject(new Error('Transcription timeout')), 60000)
+            );
+            
             result = await Promise.race([transcriptionPromise, timeoutPromise]);
             console.log(`Transcription successful with configuration ${i + 1}.`);
             break;
           } catch (configError) {
             console.warn(`Transcription config ${i + 1} failed:`, configError);
+            
+            // Add delay between attempts to prevent overwhelming the system
+            if (i < transcriptionConfigs.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
             if (i === transcriptionConfigs.length - 1) throw configError; // Re-throw last error
           }
         }
@@ -353,29 +434,52 @@ function App() {
         console.log('Transcription completed. Final text:', cleanedText);
       } catch (transcriptionError) {
         console.error('Transcription execution error:', transcriptionError);
+        
+        // Enhanced error handling with specific recovery suggestions
         if (transcriptionError instanceof Error) {
-          if (transcriptionError.message.includes('OrtRun') || transcriptionError.message.includes('error code = 6') || transcriptionError.message.includes('Session') || transcriptionError.message.includes('backend')) {
-            setError('ONNX Runtime error during transcription. Try a smaller model or different browser.'); return;
-          } else if (transcriptionError.message.includes('out of memory') || transcriptionError.message.includes('OOM')) {
-            setError('Out of memory during transcription. Try a smaller model.'); return;
-          } else if (transcriptionError.message.includes('WebAssembly') || transcriptionError.message.includes('wasm')) {
-            setError('WebAssembly error during transcription. Ensure it is enabled and refresh.'); return;
+          const errorMsg = transcriptionError.message.toLowerCase();
+          
+          if (errorMsg.includes('ortrun') || errorMsg.includes('error code = 6') || errorMsg.includes('session') || errorMsg.includes('backend')) {
+            setError('ONNX Runtime error during transcription. Try: 1) Refresh the page, 2) Use a smaller model (tiny), 3) Clear browser cache, or 4) Try a different browser (Chrome/Edge recommended).');
+            return;
+          } else if (errorMsg.includes('out of memory') || errorMsg.includes('oom') || errorMsg.includes('memory')) {
+            setError('Out of memory during transcription. Try: 1) Use the tiny model, 2) Close other browser tabs, 3) Refresh the page, or 4) Use shorter audio clips.');
+            return;
+          } else if (errorMsg.includes('webassembly') || errorMsg.includes('wasm')) {
+            setError('WebAssembly error during transcription. Try: 1) Enable WebAssembly in browser settings, 2) Refresh the page, or 3) Use a different browser.');
+            return;
+          } else if (errorMsg.includes('timeout')) {
+            setError('Transcription timed out. Try: 1) Use a shorter audio clip (under 30s), 2) Use the tiny model, or 3) Refresh and try again.');
+            return;
+          } else if (errorMsg.includes('network') || errorMsg.includes('fetch') || errorMsg.includes('load')) {
+            setError('Network error loading model. Try: 1) Check internet connection, 2) Refresh the page, or 3) Clear browser cache.');
+            return;
           }
         }
         throw transcriptionError; // Re-throw for the main catch block
       }
     } catch (err) { // Main catch block for transcribeAudio
       console.error('Overall transcription error:', err);
+      
       if (err instanceof Error) {
-        // More specific messages based on error content
-        if (err.message.includes('timeout')) setError('Transcription timed out. Try a shorter clip or smaller model.');
-        else if (err.message.includes('OrtRun') || err.message.includes('ONNX')) setError('ONNX Runtime failed. Try a smaller model, different browser, or refresh.');
-        else if (err.message.includes('memory')) setError('Out of memory. Try a smaller model.');
-        else if (err.message.includes('network') || err.message.includes('fetch')) setError('Network error. Check connection and try again.');
-        else if (err.message.includes('WebAssembly') || err.message.includes('wasm')) setError('WebAssembly error. Ensure it is enabled and refresh.');
-        else setError(`Transcription failed: ${err.message}. Consider a smaller model or browser refresh.`);
+        const errorMsg = err.message.toLowerCase();
+        
+        // More specific error messages based on error content
+        if (errorMsg.includes('timeout')) {
+          setError('Transcription timed out. Try a shorter clip (under 30s), use the tiny model, or refresh the page.');
+        } else if (errorMsg.includes('ortrun') || errorMsg.includes('onnx') || errorMsg.includes('backend')) {
+          setError('ONNX Runtime failed. This is usually a browser compatibility issue. Try: 1) Use Chrome or Edge, 2) Enable WebAssembly, 3) Clear cache and refresh, or 4) Try incognito mode.');
+        } else if (errorMsg.includes('memory') || errorMsg.includes('oom')) {
+          setError('Out of memory. Try: 1) Use the tiny model, 2) Close other tabs, 3) Use shorter audio, or 4) Refresh the page.');
+        } else if (errorMsg.includes('network') || errorMsg.includes('fetch')) {
+          setError('Network error. Check your internet connection and try again.');
+        } else if (errorMsg.includes('webassembly') || errorMsg.includes('wasm')) {
+          setError('WebAssembly error. Ensure WebAssembly is enabled in your browser and try again.');
+        } else {
+          setError(`Transcription failed: ${err.message}. Try using the tiny model, refreshing the page, or using a different browser.`);
+        }
       } else {
-        setError('An unknown transcription error occurred. Please try again.');
+        setError('An unknown transcription error occurred. Try refreshing the page or using a different browser.');
       }
     } finally {
       transcription.setLoading(false);
@@ -417,33 +521,24 @@ function App() {
 
   // Callback to run ONNX Runtime diagnostic tests
   const runONNXDiagnostic = useCallback(async () => {
-    console.log('🔍 Running ONNX Runtime diagnostic...');
-    const diagnosticResults = {
-      webAssemblySupported: typeof WebAssembly !== 'undefined',
-      userAgent: navigator.userAgent,
-      deviceMemory: (navigator as any).deviceMemory || 'N/A',
-      hardwareConcurrency: navigator.hardwareConcurrency || 'N/A',
-      onnxEnv: env // Capture ONNX environment settings
-    };
-    console.log('📊 Initial Diagnostic Info:', diagnosticResults);
+    console.log('🔍 Running comprehensive ONNX Runtime diagnostic...');
     
     try {
-      console.log('🧪 Attempting to load and run the smallest model (Xenova/whisper-tiny)...');
-      const testPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', { quantized: false });
-      const testAudio = new Float32Array(1600).fill(0.001); // Minimal dummy audio
-      await testPipeline(testAudio, { task: 'transcribe' }); // Minimal transcription task
+      const report = await generateDiagnosticReport();
+      console.log(report);
       
-      console.log('✅ ONNX Runtime diagnostic PASSED.');
-      setError('✅ ONNX Diagnostic: System appears compatible. Model loaded and ran successfully.');
-    } catch (diagnosticError) {
-      console.error('❌ ONNX Runtime diagnostic FAILED:', diagnosticError);
-      let message = `❌ ONNX Diagnostic FAILED: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}.`;
-      if (diagnosticError instanceof Error && (diagnosticError.message.includes('OrtRun') || diagnosticError.message.includes('error code = 6'))) {
-        message += ' This often indicates a browser compatibility issue with ONNX Runtime. Suggestions: Try Chrome/Edge, enable WebAssembly, clear browser cache, or try incognito mode.';
+      // Show success message with basic info
+      const diagnostics = runONNXDiagnostics();
+      if (diagnostics.compatibilityScore > 70) {
+        setError(`✅ ONNX Diagnostic: System compatibility score ${diagnostics.compatibilityScore}/100. Check console for detailed report.`);
+      } else {
+        setError(`⚠️ ONNX Diagnostic: Compatibility issues detected (score: ${diagnostics.compatibilityScore}/100). Check console for recommendations.`);
       }
-      setError(message);
+    } catch (diagnosticError) {
+      console.error('❌ ONNX Runtime diagnostic failed:', diagnosticError);
+      setError(`❌ ONNX Diagnostic FAILED: ${diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)}. This indicates serious compatibility issues.`);
     }
-  }, []); // `env` and `pipeline` are stable module imports
+  }, []);
 
   return (
     <div className="container">

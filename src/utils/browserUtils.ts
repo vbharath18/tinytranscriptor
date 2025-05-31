@@ -28,36 +28,73 @@ export const getBrowserCompatibility = (): BrowserCompatibility => {
     isCompatible = false;
   }
 
+  // Check for SharedArrayBuffer support (important for ONNX Runtime performance)
+  if (typeof SharedArrayBuffer === 'undefined') {
+    warnings.push('SharedArrayBuffer is not available. This may affect performance. Consider enabling it or using a different browser.');
+  }
+
+  // Check for WebGL support (can improve ONNX Runtime performance)
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) {
+      warnings.push('WebGL is not supported. Consider using a browser with WebGL support for better performance.');
+    }
+  } catch (e) {
+    warnings.push('Unable to check WebGL support.');
+  }
+
   // Check for known problematic browsers or those requiring specific considerations.
   const userAgent = navigator.userAgent.toLowerCase();
 
   if (userAgent.includes('firefox')) {
-    warnings.push('Firefox may experience ONNX Runtime compatibility issues. For a smoother experience, Chrome or Edge are recommended.');
-    // 'tiny' (multilingual) might be a more stable default for Firefox if ONNX issues are frequent.
+    warnings.push('Firefox may experience ONNX Runtime compatibility issues. Chrome or Edge are recommended for best experience.');
     recommendedModel = 'tiny';
   }
 
   if (userAgent.includes('safari') && !userAgent.includes('chrome')) {
-    warnings.push('Safari may have limitations with WebAssembly or ONNX Runtime. Consider using Chrome or Edge for better performance.');
+    warnings.push('Safari may have limitations with WebAssembly or ONNX Runtime. Chrome or Edge are recommended.');
+    recommendedModel = 'tiny';
+  }
+
+  // Chrome on mobile can have memory constraints
+  if (userAgent.includes('chrome') && userAgent.includes('mobile')) {
+    warnings.push('Mobile Chrome detected. Consider using the tiny model for better performance.');
     recommendedModel = 'tiny';
   }
 
   // Estimate device memory. navigator.deviceMemory is not universally supported and is a rough estimate.
   const memoryInfo = (navigator as any).deviceMemory;
-  if (typeof memoryInfo === 'number' && memoryInfo < 4) { // Assuming memoryInfo is in GB
-    warnings.push(`Low device memory detected (${memoryInfo}GB). Smaller models (like 'tiny') are strongly recommended for stability.`);
-    recommendedModel = 'tiny';
+  if (typeof memoryInfo === 'number') {
+    if (memoryInfo < 2) {
+      warnings.push(`Very low device memory detected (${memoryInfo}GB). Only tiny models are recommended.`);
+      recommendedModel = 'tiny';
+      isCompatible = false; // Mark as potentially incompatible
+    } else if (memoryInfo < 4) {
+      warnings.push(`Low device memory detected (${memoryInfo}GB). Smaller models (like 'tiny') are strongly recommended for stability.`);
+      recommendedModel = 'tiny';
+    }
   }
 
   // Check if running on a mobile device.
   const isMobile = /android|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(userAgent);
-  if (isMobile) {
+    if (isMobile) {
     warnings.push('Mobile device detected. Smaller models (like \'tiny\') are recommended for performance and stability.');
     recommendedModel = 'tiny';
+  }
+
+  // Check for older browsers that might have WebAssembly issues
+  if (userAgent.includes('edge/') && !userAgent.includes('edg/')) { // Old Edge
+    warnings.push('Legacy Edge detected. Consider upgrading to modern Edge (Chromium-based) for better compatibility.');
+    isCompatible = false;
   }
 
   // Note: The logic for `recommendedModel` prioritizes 'tiny' if any potential issue is detected.
   // If 'tiny.en' was the default and no issues were flagged, it would remain 'tiny.en'.
 
-  return { isCompatible, warnings, recommendedModel };
+  return {
+    isCompatible,
+    warnings,
+    recommendedModel
+  };
 };

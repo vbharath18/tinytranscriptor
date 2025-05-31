@@ -59,39 +59,42 @@ const useTranscription = () => {
       console.log(`Loading Whisper model: ${modelConfig.name} (${modelConfig.id})...`);
 
       // Defines a series of configurations to attempt when loading the model.
-      // This is a progressive fallback strategy: if one configuration fails (e.g., due to browser
-      // limitations or ONNX runtime issues), the next, potentially less restrictive, configuration is tried.
+      // This is a progressive fallback strategy with enhanced compatibility options
       const fallbackConfigurations = [
-        // Config 1: Standard configuration. Assumes full support for features.
-        // 'quantized: false' typically means using FP32 models, which are larger but sometimes more stable.
-        // 'revision: 'main'' ensures the latest model version from the main branch.
-        // 'progress_callback' provides download progress updates.
+        // Config 1: Most compatible configuration for ONNX Runtime Web
         {
-          quantized: false, // Use non-quantized (FP32) model version
-          revision: 'main', // Use the main branch of the model repository
+          quantized: true, // Use quantized models first for better compatibility
+          dtype: 'fp32',
+          revision: 'main',
           progress_callback: (p: any) => {
             if (p.status === 'downloading' && p.total) {
               const percentage = Math.round((p.loaded / p.total) * 100);
               setProgress(Math.min(percentage, 90)); // Cap progress at 90% until fully loaded
             } else if (p.status === 'loaded') {
-              // Model files downloaded, not yet fully initialized by pipeline
               setProgress(95);
             }
           }
         },
-        // Config 2: Simplified configuration, still preferring non-quantized.
-        // Removes progress_callback and revision pinning if they cause issues.
+        // Config 2: Try quantized without specific dtype
+        {
+          quantized: true,
+          revision: 'main'
+        },
+        // Config 3: Non-quantized with specific device targeting
+        {
+          quantized: false,
+          device: 'wasm',
+          dtype: 'fp32'
+        },
+        // Config 4: Basic quantized fallback
+        {
+          quantized: true
+        },
+        // Config 5: Basic non-quantized fallback
         {
           quantized: false
         },
-        // Config 3: Basic fallback, often defaults to quantized models if available for the model ID.
-        // This might be necessary if FP32 models are too large or not supported.
-        // (Note: Xenova's transformers.js might automatically pick quantized if not specified and available)
-        {
-          // No specific options, rely on pipeline defaults which might include quantized models.
-        },
-        // Config 4: Absolute minimal, relying entirely on pipeline defaults.
-        // This is the last resort if all other configurations fail.
+        // Config 6: Absolute minimal configuration
         {}
       ];
 
@@ -102,11 +105,18 @@ const useTranscription = () => {
         try {
           console.log(`Attempting to load model with configuration ${i + 1}/${fallbackConfigurations.length}:`, currentConfig);
 
-          transcriber.current = await pipeline(
+          // Add timeout wrapper for model loading
+          const modelLoadingPromise = pipeline(
             'automatic-speech-recognition', // Task type
             modelConfig.id,                 // Model identifier (e.g., "Xenova/whisper-tiny.en")
             currentConfig                   // Configuration options for this attempt
           );
+
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Model loading timeout')), 120000) // 2 minute timeout
+          );
+
+          transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
 
           // After successfully initializing the pipeline, perform a quick test with dummy audio.
           // This helps catch models that load but fail on first inference due to compatibility issues.
@@ -115,19 +125,22 @@ const useTranscription = () => {
             const testAudio = new Float32Array(1600); // 0.1 seconds of silence at 16kHz
             testAudio.fill(0.001); // Fill with very small non-zero values to avoid division by zero issues in some models
 
-            await transcriber.current(testAudio, {
-              task: 'transcribe',       // Standard task for Whisper
-              return_timestamps: false // Timestamps not needed for this test
+            // Test with minimal configuration to avoid inference errors
+            const testResult = await transcriber.current(testAudio, {
+              task: 'transcribe',
+              return_timestamps: false,
+              language: modelConfig.id.includes('.en') ? 'english' : undefined,
+              chunk_length_s: 30,
+              stride_length_s: 5
             });
 
-            console.log(`Model ${modelConfig.name} loaded and passed dummy input test with configuration ${i + 1}`);
+            console.log(`Model ${modelConfig.name} loaded and passed dummy input test with configuration ${i + 1}`, testResult);
             lastError = null; // Clear any previous errors from failed attempts
             break; // Model loaded successfully, exit the loop
           } catch (testError) {
             console.warn(`Model ${modelConfig.name} failed dummy input test with configuration ${i + 1}:`, testError);
             transcriber.current = null; // Clear partially loaded model
             // Treat test failure as a configuration failure and try the next one.
-            // Re-throw to be caught by the outer catch specific to this configuration attempt.
             throw testError;
           }
 
@@ -135,6 +148,11 @@ const useTranscription = () => {
           console.warn(`Configuration ${i + 1} failed:`, configError);
           lastError = configError instanceof Error ? configError : new Error(String(configError));
           transcriber.current = null;
+
+          // Add delay between attempts to prevent overwhelming the browser
+          if (i < fallbackConfigurations.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
 
           // If this is the last configuration, throw the error
           if (i === fallbackConfigurations.length - 1) {
