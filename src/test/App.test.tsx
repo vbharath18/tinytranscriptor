@@ -24,11 +24,30 @@ let mockTranscribe: ReturnType<typeof vi.fn>;
 // Mock WHISPER_MODELS used in App.tsx and ModelSelectorComponent
 vi.mock('../hooks/useTranscription', async (importOriginal) => {
   const actual = await importOriginal();
+  const mockTranscribeFn = vi.fn().mockResolvedValue({ text: 'mocked transcription' });
+  mockTranscribe = mockTranscribeFn;
+  const useTranscription = vi.fn(() => ({
+    transcript: '',
+    loading: false,
+    modelLoading: false,
+    progress: 0,
+    selectedModel: 'tiny.en',
+    setSelectedModel: vi.fn(),
+    initializeTranscriber: vi.fn().mockResolvedValue(mockTranscribeFn),
+    setTranscript: vi.fn(),
+    setLoading: vi.fn(),
+    setModelLoading: vi.fn(),
+    setProgress: vi.fn(),
+    transcriber: { current: mockTranscribeFn },
+  }));
   return {
     ...actual,
+    __esModule: true,
+    default: useTranscription,
     WHISPER_MODELS: {
       'tiny.en': { id: 'Xenova/whisper-tiny.en', name: 'Tiny English (39MB)', size: '39MB', speed: 'Fastest', accuracy: 'Basic' },
       'base.en': { id: 'Xenova/whisper-base.en', name: 'Base English (74MB)', size: '74MB', speed: 'Fast', accuracy: 'Good' },
+      'voxtral': { id: 'mistralai/Voxtral-Mini-3B-2507', name: 'Voxtral Mini (3B)', size: '3GB', speed: 'Slow', accuracy: 'Best' },
     },
   };
 });

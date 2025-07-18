@@ -7,5 +7,10 @@ export default defineConfig({
     environment: 'jsdom', // Simulates a browser environment for testing
     // Optional: if setup files are needed, uncomment and create the file
     setupFiles: './src/test/setupTests.ts',
+    server: {
+      deps: {
+        inline: [/^(?!.*vitest).*$/],
+      },
+    },
   },
 });

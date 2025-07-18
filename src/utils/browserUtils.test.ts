@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'; // Removed vi and BrowserCompatibility
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getBrowserCompatibility } from './browserUtils'; // Adjust path as needed
 
 describe('getBrowserCompatibility', () => {
@@ -7,14 +7,9 @@ describe('getBrowserCompatibility', () => {
 
   beforeEach(() => {
     // Reset mocks before each test
-    Object.defineProperty(navigator, 'userAgent', {
-      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36',
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'deviceMemory', {
-      value: 8, // Default to 8GB memory
-      configurable: true,
-      writable: true,
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36',
+      deviceMemory: 8,
     });
     // @ts-ignore
     global.WebAssembly = {}; // Assume WebAssembly is supported by default
