@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { pipeline } from '@xenova/transformers';
 
-// Available Whisper models with corrected IDs
 export const WHISPER_MODELS = {
   'tiny': { id: 'Xenova/whisper-tiny', name: 'Tiny (39MB)', size: '39MB', speed: 'Fastest', accuracy: 'Basic' },
   'tiny.en': { id: 'Xenova/whisper-tiny.en', name: 'Tiny English (39MB)', size: '39MB', speed: 'Fastest', accuracy: 'Basic' },
@@ -14,182 +13,162 @@ export const WHISPER_MODELS = {
 
 export type WhisperModelKey = keyof typeof WHISPER_MODELS;
 
-// Custom hook for transcription with progress tracking
 const useTranscription = () => {
   const [transcript, setTranscript] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [selectedModel, setSelectedModel] = useState<WhisperModelKey>('tiny.en');
-  const transcriber = useRef<any>(null); // Holds the loaded transcription pipeline
-  // Stores the ID of the currently loaded model to avoid reloading the same model.
+  const [error, setError] = useState<string | null>(null);
+  const [audioDebugInfo, setAudioDebugInfo] = useState<any | null>(null);
+  const transcriber = useRef<any>(null);
   const currentModelRef = useRef<string | null>(null);
 
   const initializeTranscriber = useCallback(async (modelKey?: WhisperModelKey) => {
-    const modelToUse = modelKey || selectedModel; // Use provided modelKey or the currently selected one
-    const modelConfig = WHISPER_MODELS[modelToUse]; // Get configuration for the selected model
+    const modelToUse = modelKey || selectedModel;
+    const modelConfig = WHISPER_MODELS[modelToUse];
 
-    // If the requested model is already loaded, return the existing transcriber instance.
     if (transcriber.current && currentModelRef.current === modelConfig.id) {
-      console.log(`Model ${modelConfig.name} is already loaded.`);
       return transcriber.current;
     }
 
-    // If a different model is loaded, or switching models, clear the old one.
     if (transcriber.current && currentModelRef.current !== modelConfig.id) {
-      console.log(`Switching model from ${currentModelRef.current} to ${modelConfig.id}`);
-      transcriber.current = null; // Allow the old model to be garbage collected
+      transcriber.current = null;
       currentModelRef.current = null;
-      // Attempt to explicitly trigger garbage collection if the browser supports it.
-      // This can be helpful in resource-constrained environments like mobile browsers.
       if ((window as any).gc) {
-        console.log('Attempting to trigger garbage collection...');
         (window as any).gc();
       }
     }
 
-    setModelLoading(true); // Signal that model loading has started
+    setModelLoading(true);
     setProgress(0);
     try {
-      // Simulate progress for better UX
-      const progressInterval = setInterval(() => {
-        setProgress((prev: number) => Math.min(prev + 5, 80));
-      }, 500);
-
-      console.log(`Loading Whisper model: ${modelConfig.name} (${modelConfig.id})...`);
-
-      // Defines a series of configurations to attempt when loading the model.
-      // This is a progressive fallback strategy with enhanced compatibility options
+      const progressInterval = setInterval(() => setProgress(prev => Math.min(prev + 5, 80)), 500);
       const fallbackConfigurations = [
-        // Config 1: Most compatible configuration for ONNX Runtime Web
-        {
-          quantized: true, // Use quantized models first for better compatibility
-          dtype: 'fp32',
-          revision: 'main',
-          progress_callback: (p: any) => {
-            if (p.status === 'downloading' && p.total) {
-              const percentage = Math.round((p.loaded / p.total) * 100);
-              setProgress(Math.min(percentage, 90)); // Cap progress at 90% until fully loaded
-            } else if (p.status === 'loaded') {
-              setProgress(95);
-            }
-          }
-        },
-        // Config 2: Try quantized without specific dtype
-        {
-          quantized: true,
-          revision: 'main'
-        },
-        // Config 3: Non-quantized with specific device targeting
-        {
-          quantized: false,
-          device: 'wasm',
-          dtype: 'fp32'
-        },
-        // Config 4: Basic quantized fallback
-        {
-          quantized: true
-        },
-        // Config 5: Basic non-quantized fallback
-        {
-          quantized: false
-        },
-        // Config 6: Absolute minimal configuration
+        { quantized: true, dtype: 'fp32', revision: 'main', progress_callback: (p: any) => { if (p.status === 'downloading' && p.total) setProgress(Math.min(Math.round((p.loaded / p.total) * 100), 90)); else if (p.status === 'loaded') setProgress(95); } },
+        { quantized: true, revision: 'main' },
+        { quantized: false, device: 'wasm', dtype: 'fp32' },
+        { quantized: true },
+        { quantized: false },
         {}
       ];
-
       let lastError: Error | null = null;
-
-      for (let i = 0; i < fallbackConfigurations.length; i++) {
-        const currentConfig = fallbackConfigurations[i];
+      for (const config of fallbackConfigurations) {
         try {
-          console.log(`Attempting to load model with configuration ${i + 1}/${fallbackConfigurations.length}:`, currentConfig);
-
-          // Add timeout wrapper for model loading
-          const modelLoadingPromise = pipeline(
-            'automatic-speech-recognition', // Task type
-            modelConfig.id,                 // Model identifier (e.g., "Xenova/whisper-tiny.en")
-            currentConfig                   // Configuration options for this attempt
-          );
-
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Model loading timeout')), 120000) // 2 minute timeout
-          );
-
+          const modelLoadingPromise = pipeline('automatic-speech-recognition', modelConfig.id, config);
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Model loading timeout')), 120000));
           transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
-
-          // After successfully initializing the pipeline, perform a quick test with dummy audio.
-          // This helps catch models that load but fail on first inference due to compatibility issues.
-          console.log('Model pipeline initialized. Testing with dummy input...');
-          try {
-            const testAudio = new Float32Array(1600); // 0.1 seconds of silence at 16kHz
-            testAudio.fill(0.001); // Fill with very small non-zero values to avoid division by zero issues in some models
-
-            // Test with minimal configuration to avoid inference errors
-            const testResult = await transcriber.current(testAudio, {
-              task: 'transcribe',
-              return_timestamps: false,
-              language: modelConfig.id.includes('.en') ? 'english' : undefined,
-              chunk_length_s: 30,
-              stride_length_s: 5
-            });
-
-            console.log(`Model ${modelConfig.name} loaded and passed dummy input test with configuration ${i + 1}`, testResult);
-            lastError = null; // Clear any previous errors from failed attempts
-            break; // Model loaded successfully, exit the loop
-          } catch (testError) {
-            console.warn(`Model ${modelConfig.name} failed dummy input test with configuration ${i + 1}:`, testError);
-            transcriber.current = null; // Clear partially loaded model
-            // Treat test failure as a configuration failure and try the next one.
-            throw testError;
-          }
-
-        } catch (configError) { // Catches errors from pipeline() or the dummy input test
-          console.warn(`Configuration ${i + 1} failed:`, configError);
-          lastError = configError instanceof Error ? configError : new Error(String(configError));
+          const testAudio = new Float32Array(1600).fill(0.001);
+          await transcriber.current(testAudio, { task: 'transcribe', return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e instanceof Error ? e : new Error(String(e));
           transcriber.current = null;
-
-          // Add delay between attempts to prevent overwhelming the browser
-          if (i < fallbackConfigurations.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-
-          // If this is the last configuration, throw the error
-          if (i === fallbackConfigurations.length - 1) {
-            throw lastError;
-          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
-
+      if (lastError) throw lastError;
       currentModelRef.current = modelConfig.id;
       clearInterval(progressInterval);
       setProgress(100);
-      console.log(`Whisper model ${modelConfig.name} loaded successfully`);
     } catch (err) {
-      console.error('All model loading configurations failed:', err);
-
-      throw new Error(`Failed to load transcription model ${modelConfig.name}. This may be due to ONNX Runtime compatibility issues. Please try: 1) Using a smaller model (tiny or base), 2) Refreshing the page, 3) Clearing browser cache, or 4) Using a different browser. Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setError(`Failed to load model: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      throw err;
     } finally {
       setModelLoading(false);
       setTimeout(() => setProgress(0), 500);
     }
-
     return transcriber.current;
   }, [selectedModel]);
+
+  const transcribe = useCallback(async (audioURL: string | null) => {
+    if (!audioURL) {
+      setError('No audio file available for transcription.');
+      return;
+    }
+
+    setLoading(true);
+    setTranscript('');
+    setError(null);
+    setAudioDebugInfo(null);
+
+    try {
+      let transcriberPipeline = transcriber.current;
+      if (!transcriberPipeline || currentModelRef.current !== WHISPER_MODELS[selectedModel].id) {
+          transcriberPipeline = await initializeTranscriber();
+      }
+      if (!transcriberPipeline) {
+        throw new Error("Failed to initialize transcription model.");
+      }
+
+      const response = await fetch(audioURL);
+      if (!response.ok) throw new Error(`Failed to fetch audio: ${response.statusText}`);
+      const audioBlob = await response.blob();
+      const arrayBuffer = await audioBlob.arrayBuffer();
+
+      const tempAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const decodedAudioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
+
+      const duration = decodedAudioBuffer.duration;
+      if (duration > 30) {
+        setError('Audio is too long (max 30s). Please use shorter clips.');
+        return;
+      }
+      if (duration < 0.1) {
+        setError('Audio is too short (min 0.1s). Please provide longer audio.');
+        return;
+      }
+      setAudioDebugInfo({ duration: duration.toFixed(2), originalSampleRate: decodedAudioBuffer.sampleRate, channels: decodedAudioBuffer.numberOfChannels, originalLength: decodedAudioBuffer.length });
+
+      let audioData = decodedAudioBuffer.getChannelData(0);
+      const targetSampleRate = 16000;
+      if (decodedAudioBuffer.sampleRate !== targetSampleRate) {
+        const offlineContext = new OfflineAudioContext(1, Math.ceil(duration * targetSampleRate), targetSampleRate);
+        const source = offlineContext.createBufferSource();
+        source.buffer = decodedAudioBuffer;
+        source.connect(offlineContext.destination);
+        source.start(0);
+        const resampledBuffer = await offlineContext.startRendering();
+        audioData = resampledBuffer.getChannelData(0);
+      }
+
+      const maxAmplitude = Math.max(...Array.from(audioData).map(val => Math.abs(val)));
+      setAudioDebugInfo(prev => ({ ...prev, maxAmplitude: maxAmplitude.toFixed(4), processedLength: audioData.length, targetSampleRate }));
+
+      if (maxAmplitude < 0.0001) {
+        setError('Audio signal is too weak or silent.');
+        return;
+      }
+
+      const processedAudio = new Float32Array(audioData);
+      const result: any = await transcriberPipeline(processedAudio, { task: 'transcribe', return_timestamps: false });
+
+      const text = result?.text?.trim() || '';
+      if (!text) {
+        setError('No speech detected.');
+        return;
+      }
+      setTranscript(text);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setError(`Transcription failed: ${errorMsg}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedModel, initializeTranscriber]);
 
   return {
     transcript,
     setTranscript,
     loading,
-    setLoading,
     modelLoading,
-    setModelLoading,
     progress,
-    setProgress,
     selectedModel,
     setSelectedModel,
-    transcriber,
-    initializeTranscriber
+    error,
+    audioDebugInfo,
+    transcribe,
   };
 };
 

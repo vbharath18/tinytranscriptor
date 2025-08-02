@@ -1,3 +1,6 @@
+// Import Jest DOM custom matchers to extend Vitest's `expect`
+import '@testing-library/jest-dom';
+
 // This file can be used for global test setup, mocks, etc.
 // For example, mocking browser APIs not available in JSDOM:
 // import { vi } from 'vitest';
@@ -11,6 +14,23 @@
 //   writable: true,
 //   configurable: true,
 // });
+
+// Polyfill Blob.arrayBuffer for JSDOM environment, which is missing this method.
+if (typeof Blob.prototype.arrayBuffer !== 'function') {
+  Blob.prototype.arrayBuffer = function() {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve(reader.result as ArrayBuffer);
+      };
+      reader.onerror = () => {
+        reject(reader.error);
+      };
+      // FileReader can read a Blob directly, no need for the .text() intermediate step.
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}
 
 // Mocking MediaRecorder
 if (typeof window !== 'undefined') {
