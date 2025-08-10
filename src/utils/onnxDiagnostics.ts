@@ -120,23 +120,27 @@ export const runONNXDiagnostics = (): ONNXDiagnostics => {
 export const testONNXRuntime = async (): Promise<{ success: boolean; error?: string; performance?: number }> => {
   try {
     const startTime = performance.now();
-    
+    const modelId = 'Xenova/whisper-tiny';
+    const options = { quantized: true };
+
     // Dynamic import to avoid loading ONNX if not needed
-    const { pipeline } = await import('@xenova/transformers');
+    const { pipeline, AutoTokenizer, AutoModelForSpeechSeq2Seq } = await import('@xenova/transformers');
     
-    console.log('🧪 Testing ONNX Runtime with minimal model...');
+    console.log('🧪 Testing ONNX Runtime with minimal model (explicit loading)...');
     
-    // Use the smallest possible model for testing
-    const testPipeline = await pipeline('speech-to-text', 'Xenova/whisper-tiny', {
-      quantized: true
-    });
+    // Explicitly load tokenizer and model to bypass faulty routing
+    const tokenizer = await AutoTokenizer.from_pretrained(modelId, options);
+    const model = await AutoModelForSpeechSeq2Seq.from_pretrained(modelId, options);
+
     
+    // Create pipeline with pre-loaded components
+    const testPipeline = await pipeline('automatic-speech-recognition', model, { tokenizer });
+
     // Test with minimal audio data
     const testAudio = new Float32Array(1600); // 0.1 seconds at 16kHz
     testAudio.fill(0.001);
     
     const result = await testPipeline(testAudio, {
-      task: 'transcribe',
       return_timestamps: false,
       chunk_length_s: 30
     });

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { pipeline } from '@xenova/transformers';
+import { pipeline, AutoTokenizer, AutoModelForSpeechSeq2Seq } from '@xenova/transformers';
 
 export const WHISPER_MODELS = {
   'tiny': { id: 'Xenova/whisper-tiny', name: 'Tiny (39MB)', size: '39MB', speed: 'Fastest', accuracy: 'Basic' },
@@ -26,12 +26,13 @@ const useTranscription = () => {
   const initializeTranscriber = useCallback(async (modelKey?: WhisperModelKey) => {
     const modelToUse = modelKey || selectedModel;
     const modelConfig = WHISPER_MODELS[modelToUse];
+    const modelId = modelConfig.id;
 
-    if (transcriber.current && currentModelRef.current === modelConfig.id) {
+    if (transcriber.current && currentModelRef.current === modelId) {
       return transcriber.current;
     }
 
-    if (transcriber.current && currentModelRef.current !== modelConfig.id) {
+    if (transcriber.current && currentModelRef.current !== modelId) {
       transcriber.current = null;
       currentModelRef.current = null;
       if ((window as any).gc) {
@@ -43,6 +44,7 @@ const useTranscription = () => {
     setProgress(0);
     try {
       const progressInterval = setInterval(() => setProgress(prev => Math.min(prev + 5, 80)), 500);
+
       const fallbackConfigurations = [
         { quantized: true, dtype: 'fp32', revision: 'main', progress_callback: (p: any) => { if (p.status === 'downloading' && p.total) setProgress(Math.min(Math.round((p.loaded / p.total) * 100), 90)); else if (p.status === 'loaded') setProgress(95); } },
         { quantized: true, revision: 'main' },
@@ -51,14 +53,18 @@ const useTranscription = () => {
         { quantized: false },
         {}
       ];
+
       let lastError: Error | null = null;
       for (const config of fallbackConfigurations) {
         try {
-          const modelLoadingPromise = pipeline('speech-to-text', modelConfig.id, config);
-          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Model loading timeout')), 120000));
-          transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
+          const tokenizer = await AutoTokenizer.from_pretrained(modelId, config);
+          const model = await AutoModelForSpeechSeq2Seq.from_pretrained(modelId, config);
+
+          transcriber.current = await pipeline('automatic-speech-recognition', model, { tokenizer });
+
           const testAudio = new Float32Array(1600).fill(0.001);
-          await transcriber.current(testAudio, { return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
+          await transcriber.current(testAudio, { return_timestamps: false, language: modelId.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
+
           lastError = null;
           break;
         } catch (e) {
@@ -67,8 +73,12 @@ const useTranscription = () => {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
-      if (lastError) throw lastError;
-      currentModelRef.current = modelConfig.id;
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      currentModelRef.current = modelId;
       clearInterval(progressInterval);
       setProgress(100);
     } catch (err) {
