@@ -127,7 +127,7 @@ export const testONNXRuntime = async (): Promise<{ success: boolean; error?: str
     console.log('🧪 Testing ONNX Runtime with minimal model...');
     
     // Use the smallest possible model for testing
-    const testPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+    const testPipeline = await pipeline('speech-to-text', 'Xenova/whisper-tiny', {
       quantized: true
     });
     

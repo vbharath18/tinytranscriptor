@@ -8,7 +8,6 @@ export const WHISPER_MODELS = {
   'base.en': { id: 'Xenova/whisper-base.en', name: 'Base English (74MB)', size: '74MB', speed: 'Fast', accuracy: 'Good' },
   'small': { id: 'Xenova/whisper-small', name: 'Small (244MB)', size: '244MB', speed: 'Medium', accuracy: 'Better' },
   'small.en': { id: 'Xenova/whisper-small.en', name: 'Small English (244MB)', size: '244MB', speed: 'Medium', accuracy: 'Better' },
-  'voxtral': { id: 'mistralai/Voxtral-Mini-3B-2507', name: 'Voxtral Mini (3B)', size: '3GB', speed: 'Slow', accuracy: 'Best' },
 } as const;
 
 export type WhisperModelKey = keyof typeof WHISPER_MODELS;
@@ -55,11 +54,11 @@ const useTranscription = () => {
       let lastError: Error | null = null;
       for (const config of fallbackConfigurations) {
         try {
-          const modelLoadingPromise = pipeline('automatic-speech-recognition', modelConfig.id, config);
+          const modelLoadingPromise = pipeline('speech-to-text', modelConfig.id, config);
           const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Model loading timeout')), 120000));
           transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
           const testAudio = new Float32Array(1600).fill(0.001);
-          await transcriber.current(testAudio, { task: 'transcribe', return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
+          await transcriber.current(testAudio, { return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
           lastError = null;
           break;
         } catch (e) {
@@ -142,7 +141,7 @@ const useTranscription = () => {
       }
 
       const processedAudio = new Float32Array(audioData);
-      const result: any = await transcriberPipeline(processedAudio, { task: 'transcribe', return_timestamps: false });
+      const result: any = await transcriberPipeline(processedAudio, { return_timestamps: false });
 
       const text = result?.text?.trim() || '';
       if (!text) {
