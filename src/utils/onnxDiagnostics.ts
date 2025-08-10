@@ -131,7 +131,6 @@ export const testONNXRuntime = async (): Promise<{ success: boolean; error?: str
     // Explicitly load tokenizer and model to bypass faulty routing
     const tokenizer = await AutoTokenizer.from_pretrained(modelId, options);
     const model = await AutoModelForSpeechSeq2Seq.from_pretrained(modelId, options);
-
     
     // Create pipeline with pre-loaded components
     const testPipeline = await pipeline('automatic-speech-recognition', model, { tokenizer });

@@ -28,7 +28,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only in browser environ
     env.backends.onnx.logLevel = 'error';
     
     // Primary execution provider
-    env.backends.onnx.executionProviders = ['wasm'];
+    env.backends.onnx.executionProviders = ['webgl', 'wasm'];
     
     // WebAssembly optimization settings
     env.backends.onnx.wasm.wasmPaths = undefined;
