@@ -58,7 +58,7 @@ const useTranscription = () => {
           const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Model loading timeout')), 120000));
           transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
           const testAudio = new Float32Array(1600).fill(0.001);
-          await transcriber.current(testAudio, { task: 'transcribe', return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
+          await transcriber.current(testAudio, { return_timestamps: false, language: modelConfig.id.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
           lastError = null;
           break;
         } catch (e) {
@@ -141,7 +141,7 @@ const useTranscription = () => {
       }
 
       const processedAudio = new Float32Array(audioData);
-      const result: any = await transcriberPipeline(processedAudio, { task: 'transcribe', return_timestamps: false });
+      const result: any = await transcriberPipeline(processedAudio, { return_timestamps: false });
 
       const text = result?.text?.trim() || '';
       if (!text) {
