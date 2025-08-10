@@ -37,9 +37,6 @@ const ModelSelectorComponent: React.FC<ModelSelectorComponentProps> = ({
           <option value="small.en">🇺🇸 Small English ({whisperModels['small.en'].size})</option>
           <option value="small">🌍 Small Multilingual ({whisperModels['small'].size})</option>
         </optgroup>
-        <optgroup label="Advanced Models (Experimental)">
-          <option value="voxtral">🔊 Voxtral ({whisperModels['voxtral'].size})</option>
-        </optgroup>
       </select>
       <div className="model-info">
         <span className="model-stats">
