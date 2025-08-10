@@ -54,7 +54,7 @@ const useTranscription = () => {
       let lastError: Error | null = null;
       for (const config of fallbackConfigurations) {
         try {
-          const modelLoadingPromise = pipeline('automatic-speech-recognition', modelConfig.id, config);
+          const modelLoadingPromise = pipeline('speech-to-text', modelConfig.id, config);
           const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Model loading timeout')), 120000));
           transcriber.current = await Promise.race([modelLoadingPromise, timeoutPromise]);
           const testAudio = new Float32Array(1600).fill(0.001);
