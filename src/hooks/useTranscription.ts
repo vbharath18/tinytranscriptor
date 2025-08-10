@@ -1,5 +1,9 @@
 import { useState, useRef, useCallback } from 'react';
-import { pipeline, AutoTokenizer, AutoModelForSpeechSeq2Seq } from '@xenova/transformers';
+import { pipeline, env } from '@xenova/transformers';
+
+// Configure transformers environment - let App.tsx handle ONNX backend configuration
+env.allowLocalModels = false;
+env.allowRemoteModels = true;
 
 export const WHISPER_MODELS = {
   'tiny': { id: 'Xenova/whisper-tiny', name: 'Tiny (39MB)', size: '39MB', speed: 'Fastest', accuracy: 'Basic' },
@@ -46,10 +50,31 @@ const useTranscription = () => {
       const progressInterval = setInterval(() => setProgress(prev => Math.min(prev + 5, 80)), 500);
 
       const fallbackConfigurations = [
-        { quantized: true, dtype: 'fp32', revision: 'main', progress_callback: (p: any) => { if (p.status === 'downloading' && p.total) setProgress(Math.min(Math.round((p.loaded / p.total) * 100), 90)); else if (p.status === 'loaded') setProgress(95); } },
+        // Try with explicit backend preferences
+        {
+          quantized: true,
+          dtype: 'fp32',
+          revision: 'main',
+          device: 'webgl',
+          progress_callback: (p: any) => {
+            if (p.status === 'downloading') {
+              if (p.total) {
+                setProgress(Math.min(Math.round((p.loaded / p.total) * 100), 90));
+              } else {
+                setProgress(Math.min(50 + ((Date.now() % 1000) / 25), 85));
+              }
+            } else if (p.status === 'loaded') {
+              setProgress(95);
+            }
+          }
+        },
+        // Fallback configurations
+        { quantized: true, revision: 'main', device: 'webgl' },
+        { quantized: true, dtype: 'fp32', device: 'webgl' },
         { quantized: true, revision: 'main' },
-        { quantized: false, device: 'wasm', dtype: 'fp32' },
-        { quantized: true },
+        { quantized: true, dtype: 'fp32' },
+        { quantized: false, dtype: 'fp32' },
+        { quantized: true, dtype: 'int8' },
         { quantized: false },
         {}
       ];
@@ -57,10 +82,7 @@ const useTranscription = () => {
       let lastError: Error | null = null;
       for (const config of fallbackConfigurations) {
         try {
-          const tokenizer = await AutoTokenizer.from_pretrained(modelId, config);
-          const model = await AutoModelForSpeechSeq2Seq.from_pretrained(modelId, config);
-
-          transcriber.current = await pipeline('automatic-speech-recognition', model, { tokenizer });
+          transcriber.current = await pipeline('automatic-speech-recognition', modelId, config);
 
           const testAudio = new Float32Array(1600).fill(0.001);
           await transcriber.current(testAudio, { return_timestamps: false, language: modelId.includes('.en') ? 'english' : undefined, chunk_length_s: 30, stride_length_s: 5 });
@@ -105,7 +127,7 @@ const useTranscription = () => {
     try {
       let transcriberPipeline = transcriber.current;
       if (!transcriberPipeline || currentModelRef.current !== WHISPER_MODELS[selectedModel].id) {
-          transcriberPipeline = await initializeTranscriber();
+        transcriberPipeline = await initializeTranscriber();
       }
       if (!transcriberPipeline) {
         throw new Error("Failed to initialize transcription model.");
@@ -143,7 +165,7 @@ const useTranscription = () => {
       }
 
       const maxAmplitude = Math.max(...Array.from(audioData).map(val => Math.abs(val)));
-      setAudioDebugInfo(prev => ({ ...prev, maxAmplitude: maxAmplitude.toFixed(4), processedLength: audioData.length, targetSampleRate }));
+      setAudioDebugInfo((prev: any) => ({ ...prev, maxAmplitude: maxAmplitude.toFixed(4), processedLength: audioData.length, targetSampleRate }));
 
       if (maxAmplitude < 0.0001) {
         setError('Audio signal is too weak or silent.');

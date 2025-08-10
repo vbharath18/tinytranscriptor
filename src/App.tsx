@@ -15,27 +15,12 @@ env.allowLocalModels = false; // Disallow local models for this web environment
 env.allowRemoteModels = true; // Allow fetching models from Hugging Face Hub
 env.useBrowserCache = true;   // Cache models in browser's IndexedDB
 
-// Configure ONNX Runtime Web settings for compatibility and stability
-if (typeof window !== 'undefined') { // Ensure this runs only in browser environment
-  // Enhanced ONNX Runtime configuration for better compatibility
+// Minimal ONNX Runtime configuration - let the library handle backend selection
+if (typeof window !== 'undefined') {
   try {
-    // Conservative settings for maximum browser compatibility
-    env.backends.onnx.wasm.numThreads = 1;
-    env.backends.onnx.wasm.simd = false;
-    env.backends.onnx.wasm.proxy = false;
-    
-    // Set log level to 'error' to reduce console noise
+    // Only set essential configuration
     env.backends.onnx.logLevel = 'error';
-    
-    // Primary execution provider
-    env.backends.onnx.executionProviders = ['webgl', 'wasm'];
-    
-    // WebAssembly optimization settings
-    // Point to the self-hosted wasm files
-    env.backends.onnx.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/';
-    env.backends.onnx.wasm.initTimeout = 60000; // Increased timeout to 60 seconds
-    
-    console.log('ONNX Runtime configured for maximum compatibility');
+    console.log('ONNX Runtime configured with minimal settings');
   } catch (configError) {
     console.warn('Failed to configure ONNX Runtime:', configError);
   }
