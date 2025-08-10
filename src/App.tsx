@@ -28,10 +28,11 @@ if (typeof window !== 'undefined') { // Ensure this runs only in browser environ
     env.backends.onnx.logLevel = 'error';
     
     // Primary execution provider
-    env.backends.onnx.executionProviders = ['wasm'];
+    env.backends.onnx.executionProviders = ['webgl', 'wasm'];
     
     // WebAssembly optimization settings
-    env.backends.onnx.wasm.wasmPaths = undefined;
+    // Point to the self-hosted wasm files
+    env.backends.onnx.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/';
     env.backends.onnx.wasm.initTimeout = 60000; // Increased timeout to 60 seconds
     
     console.log('ONNX Runtime configured for maximum compatibility');
