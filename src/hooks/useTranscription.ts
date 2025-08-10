@@ -8,7 +8,6 @@ export const WHISPER_MODELS = {
   'base.en': { id: 'Xenova/whisper-base.en', name: 'Base English (74MB)', size: '74MB', speed: 'Fast', accuracy: 'Good' },
   'small': { id: 'Xenova/whisper-small', name: 'Small (244MB)', size: '244MB', speed: 'Medium', accuracy: 'Better' },
   'small.en': { id: 'Xenova/whisper-small.en', name: 'Small English (244MB)', size: '244MB', speed: 'Medium', accuracy: 'Better' },
-  'voxtral': { id: 'mistralai/Voxtral-Mini-3B-2507', name: 'Voxtral Mini (3B)', size: '3GB', speed: 'Slow', accuracy: 'Best' },
 } as const;
 
 export type WhisperModelKey = keyof typeof WHISPER_MODELS;
