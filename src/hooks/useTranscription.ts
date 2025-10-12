@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback } from 'react';
 import { pipeline, env } from '@xenova/transformers';
+import type { ChunkingProgress, ChunkResult, ChunkingOptions } from '../types/chunking';
+import { DEFAULT_CHUNKING_OPTIONS, ChunkingError } from '../types/chunking';
+import { ChunkProcessor } from '../utils/chunkProcessor';
 
 // Configure transformers environment - let App.tsx handle ONNX backend configuration
 env.allowLocalModels = false;
@@ -24,6 +27,13 @@ const useTranscription = () => {
   const [selectedModel, setSelectedModel] = useState<WhisperModelKey>('tiny.en');
   const [error, setError] = useState<string | null>(null);
   const [audioDebugInfo, setAudioDebugInfo] = useState<any | null>(null);
+  
+  // Chunking-related state
+  const [isChunking, setIsChunking] = useState(false);
+  const [chunkingProgress, setChunkingProgress] = useState<ChunkingProgress | null>(null);
+  const [chunkResults, setChunkResults] = useState<ChunkResult[]>([]);
+  const [chunkingOptions, setChunkingOptions] = useState<ChunkingOptions>(DEFAULT_CHUNKING_OPTIONS);
+  
   const transcriber = useRef<any>(null);
   const currentModelRef = useRef<string | null>(null);
 
@@ -123,6 +133,10 @@ const useTranscription = () => {
     setTranscript('');
     setError(null);
     setAudioDebugInfo(null);
+    // Reset chunking state
+    setIsChunking(false);
+    setChunkingProgress(null);
+    setChunkResults([]);
 
     try {
       let transcriberPipeline = transcriber.current;
@@ -142,10 +156,6 @@ const useTranscription = () => {
       const decodedAudioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
 
       const duration = decodedAudioBuffer.duration;
-      if (duration > 30) {
-        setError('Audio is too long (max 30s). Please use shorter clips.');
-        return;
-      }
       if (duration < 0.1) {
         setError('Audio is too short (min 0.1s). Please provide longer audio.');
         return;
@@ -173,21 +183,117 @@ const useTranscription = () => {
       }
 
       const processedAudio = new Float32Array(audioData);
-      const result: any = await transcriberPipeline(processedAudio, { return_timestamps: false });
 
-      const text = result?.text?.trim() || '';
-      if (!text) {
-        setError('No speech detected.');
-        return;
+      // Detect when chunking is needed (duration > 30s)
+      if (ChunkProcessor.shouldUseChunking(duration)) {
+        // Use chunking workflow for long audio files
+        await transcribeWithChunking(processedAudio, targetSampleRate, transcriberPipeline);
+      } else {
+        // Fallback to original logic for shorter audio files
+        await transcribeWithoutChunking(processedAudio, transcriberPipeline);
       }
-      setTranscript(text);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(`Transcription failed: ${errorMsg}`);
     } finally {
       setLoading(false);
+      setIsChunking(false);
+      setChunkingProgress(null);
     }
   }, [selectedModel, initializeTranscriber]);
+
+  // Helper function for transcribing with chunking
+  const transcribeWithChunking = useCallback(async (
+    audioData: Float32Array,
+    sampleRate: number,
+    transcriberPipeline: any
+  ) => {
+    setIsChunking(true);
+    
+    // Create chunk processor with progress callback
+    const chunkProcessor = new ChunkProcessor({}, chunkingOptions);
+    chunkProcessor.setProgressCallback((progress: ChunkingProgress) => {
+      setChunkingProgress(progress);
+    });
+
+    // Create transcription function that wraps the pipeline
+    const transcriptionFunction = async (chunkAudioData: Float32Array) => {
+      const result = await transcriberPipeline(chunkAudioData, { 
+        return_timestamps: false,
+        language: WHISPER_MODELS[selectedModel].id.includes('.en') ? 'english' : undefined,
+        chunk_length_s: 30,
+        stride_length_s: 5
+      });
+      return { text: result?.text || '', confidence: result?.confidence };
+    };
+
+    // Process chunks
+    const processingResult = await chunkProcessor.processChunks(
+      audioData,
+      sampleRate,
+      transcriptionFunction
+    );
+
+    if (!processingResult.success) {
+      throw new Error(
+        processingResult.errors.length > 0 
+          ? processingResult.errors[0].message 
+          : 'Chunking failed with unknown error'
+      );
+    }
+
+    // Update state with results
+    setChunkResults(processingResult.chunkResults);
+    
+    const finalTranscript = processingResult.transcript.trim();
+    if (!finalTranscript) {
+      throw new Error('No speech detected in any chunks.');
+    }
+    
+    setTranscript(finalTranscript);
+  }, [selectedModel, chunkingOptions]);
+
+  // Helper function for transcribing without chunking (original logic)
+  const transcribeWithoutChunking = useCallback(async (
+    audioData: Float32Array,
+    transcriberPipeline: any
+  ) => {
+    const result: any = await transcriberPipeline(audioData, { 
+      return_timestamps: false,
+      language: WHISPER_MODELS[selectedModel].id.includes('.en') ? 'english' : undefined,
+      chunk_length_s: 30,
+      stride_length_s: 5
+    });
+
+    const text = result?.text?.trim() || '';
+    if (!text) {
+      throw new Error('No speech detected.');
+    }
+    setTranscript(text);
+  }, [selectedModel]);
+
+  // Helper functions for chunking state management
+  const resetChunkingState = useCallback(() => {
+    setIsChunking(false);
+    setChunkingProgress(null);
+    setChunkResults([]);
+  }, []);
+
+  const updateChunkingProgress = useCallback((progress: ChunkingProgress) => {
+    setChunkingProgress(progress);
+  }, []);
+
+  const addChunkResult = useCallback((result: ChunkResult) => {
+    setChunkResults(prev => [...prev, result]);
+  }, []);
+
+  const setChunkingState = useCallback((chunking: boolean) => {
+    setIsChunking(chunking);
+    if (!chunking) {
+      // Reset progress when chunking stops
+      setChunkingProgress(null);
+    }
+  }, []);
 
   return {
     transcript,
@@ -200,6 +306,16 @@ const useTranscription = () => {
     error,
     audioDebugInfo,
     transcribe,
+    // Chunking-related state and functions
+    isChunking,
+    chunkingProgress,
+    chunkResults,
+    chunkingOptions,
+    setChunkingOptions,
+    resetChunkingState,
+    updateChunkingProgress,
+    addChunkResult,
+    setChunkingState,
   };
 };
 

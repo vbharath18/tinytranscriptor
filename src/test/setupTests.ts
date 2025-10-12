@@ -1,5 +1,5 @@
 // Import Jest DOM custom matchers to extend Vitest's `expect`
-import '@testing-library/jest-dom';
+// import '@testing-library/jest-dom';
 
 // This file can be used for global test setup, mocks, etc.
 // For example, mocking browser APIs not available in JSDOM:
